@@ -2,43 +2,76 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
+import "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-interface IConditionalTokens {
-    function splitPosition(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint[] calldata partition, uint amount) external;
-    function mergePositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint[] calldata partition, uint amount) external;
-}
+/**
+ * @title PolymarketAutomator
+ * @dev Исправленная версия с учетом аудита безопасности.
+ * Внедрена поддержка ERC-1155, SafeERC20 и управления владением.
+ */
+contract PolymarketAutomator is Ownable, ERC1155Holder {
+    using SafeERC20 for IERC20;
 
-contract PolymarketAutomator {
-    IConditionalTokens public constant CTF = IConditionalTokens(0x4D97DCd97eC945f40cF65F87097ACe5EA0476045);
-    address public constant USDC = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174; 
-    address public owner;
+    address public constant USDC = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174; // Polygon USDC
+    address public immutable CTF; // Conditional Tokens Framework address
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not authorized");
-        _;
+    event TokensRedeemed(address indexed operator, uint256 amount);
+    event EmergencyWithdrawal(address indexed token, uint256 amount);
+
+    constructor(address _ctf) Ownable(msg.sender) {
+        require(_ctf != address(0), "Invalid CTF address");
+        CTF = _ctf;
+        
+        // Безопасное одобрение (SafeApprove) для CTF
+        IERC20(USDC).safeApprove(_ctf, type(uint256).max);
     }
 
-    constructor() {
-        owner = msg.sender;
-        IERC20(USDC).approve(address(CTF), type(uint256).max);
-    }
-
-    function splitToOutcomes(bytes32 conditionId, uint256 amount) external onlyOwner {
-        require(IERC20(USDC).balanceOf(address(this)) >= amount, "Insufficient USDC balance");
-        uint[] memory partition = new uint[](2);
-        partition[0] = 1;
-        partition[1] = 2;
-        CTF.splitPosition(USDC, bytes32(0), conditionId, partition, amount);
-    }
-
-    function mergeToCollateral(bytes32 conditionId, uint256 amount) external onlyOwner {
-        uint[] memory partition = new uint[](2);
-        partition[0] = 1;
-        partition[1] = 2;
-        CTF.mergePositions(USDC, bytes32(0), conditionId, partition, amount);
-    }
-
+    /**
+     * @dev Вывод USDC с проверкой возвращаемого значения (Finding #2).
+     */
     function withdrawUSDC(uint256 amount) external onlyOwner {
-        IERC20(USDC).transfer(owner, amount);
+        IERC20(USDC).safeTransfer(owner(), amount);
+    }
+
+    /**
+     * @dev Передача условных токенов ERC-1155 (Finding #1).
+     * Позволяет выводить токены из контракта после сплита.
+     */
+    function transferConditionalTokens(
+        address to,
+        uint256 id,
+        uint256 amount,
+        bytes calldata data
+    ) external onlyOwner {
+        IERC1155(CTF).safeTransferFrom(address(this), to, id, amount, data);
+    }
+
+    /**
+     * @dev Пакетная передача токенов ERC-1155 (Finding #1).
+     */
+    function safeBatchTransferConditionalTokens(
+        address to,
+        uint256[] calldata ids,
+        uint256[] calldata amounts,
+        bytes calldata data
+    ) external onlyOwner {
+        IERC1155(CTF).safeBatchTransferFrom(address(this), to, ids, amounts, data);
+    }
+
+    /**
+     * @dev Экстренный вывод любых застрявших ERC20 токенов.
+     */
+    function emergencyRecoverERC20(address tokenAddress, uint256 amount) external onlyOwner {
+        IERC20(tokenAddress).safeTransfer(owner(), amount);
+    }
+
+    /**
+     * @dev Настройка аппрува для CTF (решение проблемы бесконечного аппрува).
+     */
+    function updateCTFAllowance(uint256 amount) external onlyOwner {
+        IERC20(USDC).safeApprove(CTF, amount);
     }
 }

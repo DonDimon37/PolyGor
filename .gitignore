@@ -9,5 +9,10 @@ env/
 __pycache__/
 *.pyc
 
+*.sql
+*.xlsx
+*.log
+payouts.log
+
 # Скрываем файлы Mac (если вы заливаете с мака)
 .DS_Store
